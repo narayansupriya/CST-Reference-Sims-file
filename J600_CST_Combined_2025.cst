@@ -1,0 +1,388 @@
+' ============================================================================
+' CST DESIGN STUDIO 2025 — J4600 Amphenol 10102166A812A
+' Combined Filter Network Simulation — Priority Analysis
+' Compatible: CST Studio Suite 2025
+'
+' WiFi + BT System | 104MHz SD CLK | PCIe Express Enabled
+'
+' ── HOW TO CHANGE TRACE LENGTH ──────────────────────────────────────────────
+' Find the [PARAMETERS] section below.
+' Change TRACE_LEN = 15 to your actual value in mm.
+' That single change updates ALL trace models simultaneously.
+' Re-run the simulation — all plots update automatically.
+'
+' Typical values:
+'   TRACE_LEN = 5    short/compact routing
+'   TRACE_LEN = 15   typical phone layout (default)
+'   TRACE_LEN = 25   long routing / board-edge connector
+'
+' To sweep multiple lengths at once: see SWEEP TRACE_LENGTH at bottom.
+' ─────────────────────────────────────────────────────────────────────────────
+'
+' HOW TO IMPORT IN CST 2025:
+'   1. Open CST Design Studio 2025
+'   2. File → New Project → Design Studio
+'   3. Schematic → Import Netlist → SPICE Netlist (.cst or .spi)
+'   4. Select this file
+'   5. Simulation → Taskbar → Add Task → AC Simulation
+'   6. Set frequency: 10MHz to 6GHz, 3000 points
+'   7. Press Run
+' ============================================================================
+
+**** J4600 Filter Priority Analysis — CST 2025 SPICE Netlist
+
+* ── GLOBAL OPTIONS ──────────────────────────────────────────────────────────
+.OPTIONS
++ RUNTYPE = AC
++ FREQ_START = 10MEG
++ FREQ_STOP  = 6GIG
++ FREQ_POINTS = 3000
++ SOLVER = SPICE_AC
++ MIXEDMODE = ON
+
+* ── PARAMETERS — CHANGE TRACE_LEN HERE ─────────────────────────────────────
+* TO CHANGE TRACE LENGTH: edit TRACE_LEN value below (in mm)
+* All seven filter networks use this value automatically.
+.PARAM
++ TRACE_LEN  = 15        $ mm — *** CHANGE THIS for your routing length ***
++ TRACE_Z0   = 50        $ ohm — 50 ohm microstrip (FR4, standard)
++ TRACE_VF   = 0.55      $ velocity factor FR4 (Er~4.2)
+
+* Component values — do not change unless updating the design
++ R_CLK      = 22        $ ohm CLK series resistor
++ C_CLK_COG  = 22E-12    $ F   CLK shunt C0G (correct)
++ C_CLK_X7R  = 11E-12    $ F   CLK shunt X7R degraded @1.8V (~50% loss)
++ R_DAT      = 22        $ ohm DATA/CMD series R
++ R_PU       = 47000     $ ohm pull-up resistor
++ C_SHUNT    = 10E-12    $ F   pull-up shunt cap C0G
++ C_AC       = 100E-9    $ F   PCIe AC coupling cap (100nF)
++ CMC_L_CM   = 572E-12   $ H   RefClk CMC CM inductance (470ohm@100MHz)
++ CMC_L_DIFF = 500E-12   $ H   RefClk CMC differential leakage
++ TX_L_CM    = 573E-12   $ H   PCIe TX CMC CM inductance (360ohm@100MHz)
++ TX_L_DIFF  = 800E-12   $ H   PCIe TX CMC differential leakage
++ FB_L       = 955E-12   $ H   Power rail ferrite inductance (600ohm@100MHz)
++ FB_R       = 600       $ ohm Power rail ferrite resistance @100MHz
+
+* ── SUBCIRCUIT: 50-OHM MICROSTRIP TRACE ────────────────────────────────────
+* Lossless transmission line — length controlled by TRACE_LEN parameter
+* CST 2025 syntax: TLINE element with TD calculated from length and VF
+* TD (time delay) = TRACE_LEN (mm) / (VF * speed_of_light_mm_per_ns)
+* speed of light = 299.8 mm/ns
+* TD = TRACE_LEN / (0.55 * 299.8) = TRACE_LEN / 164.89 ns
+* For TRACE_LEN=15mm: TD = 0.0910 ns = 91.0 ps
+.SUBCKT TRACE IN OUT
+T1 IN 0 OUT 0 Z0='TRACE_Z0' TD='TRACE_LEN/164.89E9'
+.ENDS TRACE
+
+* ── SUBCIRCUIT: 2-LINE CMC MODEL ────────────────────────────────────────────
+* Models a 2-line common mode choke as:
+*   Differential path : small leakage inductance (nearly transparent)
+*   Common mode path  : large coupled inductance + loss resistance
+* Ports: P_IN, N_IN = input pair | P_OUT, N_OUT = output pair
+.SUBCKT CMC_REFCLK P_IN N_IN P_OUT N_OUT
+* Differential leakage inductance (low — CMC transparent to diff signal)
+LD_P P_IN P_OUT L='CMC_L_DIFF'
+LD_N N_IN N_OUT L='CMC_L_DIFF'
+* Common mode coupled inductors (K=0.99 tight coupling)
+LCM_P P_IN CM_P L='CMC_L_CM'
+LCM_N N_IN CM_N L='CMC_L_CM'
+KCM LCM_P LCM_N 0.99
+* CM loss resistance
+RCM_P CM_P P_OUT R=600
+RCM_N CM_N N_OUT R=600
+.ENDS CMC_REFCLK
+
+.SUBCKT CMC_TX P_IN N_IN P_OUT N_OUT
+LD_P P_IN P_OUT L='TX_L_DIFF'
+LD_N N_IN N_OUT L='TX_L_DIFF'
+LCM_P P_IN CM_P L='TX_L_CM'
+LCM_N N_IN CM_N L='TX_L_CM'
+KCM LCM_P LCM_N 0.99
+RCM_P CM_P P_OUT R=360
+RCM_N CM_N N_OUT R=360
+.ENDS CMC_TX
+
+* ── SUBCIRCUIT: CAPACITOR WITH PARASITIC INDUCTANCE (ESL) ──────────────────
+* Used for: AC coupling caps (0201 vs 0402 comparison)
+* ESL_0201 = 0.3nH, ESL_0402 = 0.9nH
+.SUBCKT CAP_0201 P N
+C1 P ESL_NODE C='C_AC'
+L1 ESL_NODE N L=300E-12   $ 0.3nH ESL for 0201
+.ENDS CAP_0201
+
+.SUBCKT CAP_0402 P N
+C1 P ESL_NODE C='C_AC'
+L1 ESL_NODE N L=900E-12   $ 0.9nH ESL for 0402 — 3x higher, resonance at 3-4GHz
+.ENDS CAP_0402
+
+* ============================================================================
+* NETWORK 1: CLK LPF — Pin 5
+* S21(CLK_ANT → CLK_SRC) = filter isolation
+* Run A: C0G correct | Run B: X7R degraded under 1.8V bias
+* ============================================================================
+.SUBCKT CLK_FILTER CLK_SRC_PORT CLK_ANT_PORT
+
+* Port 1 — SoC CLK source
+VP1 CLK_SRC_PORT 0 AC 1 DC 0   $ normalized 1V source
+
+* Series R — 22 ohm 0201 Vishay CRCW020122R0FK
+R_CLK CLK_SRC_PORT CLK_FILT R='R_CLK'
+
+* Shunt cap — uncomment ONE of the following:
+* RUN A (C0G — correct): use C_CLK_COG
+C_CLK_A CLK_FILT 0 C='C_CLK_COG'    $ 22pF C0G flat — CORRECT
+
+* RUN B (X7R degraded): comment out line above, uncomment below
+* C_CLK_B CLK_FILT 0 C='C_CLK_X7R'  $ 11pF effective X7R@1.8V — WRONG dielectric
+
+* 15mm microstrip trace to connector (length set by TRACE_LEN parameter)
+XTRACE_CLK CLK_FILT CLK_ANT_PORT TRACE
+
+* Port 2 — antenna-side 50 ohm load
+RL_CLK CLK_ANT_PORT 0 R=50
+
+.ENDS CLK_FILTER
+
+* ============================================================================
+* NETWORK 2: DATA0 Pull-up Stub — Pin 7
+* S11(D0_ANT) = stub resonance — low S11 = stub absorbing WiFi energy (bad)
+* Run A: with 10pF C0G shunt | Run B: without (comment out C_D0_SHUNT)
+* ============================================================================
+.SUBCKT DATA0_STUB D0_SRC_PORT D0_ANT_PORT
+
+VP1 D0_SRC_PORT 0 AC 1 DC 0
+
+R_D0 D0_SRC_PORT D0_NODE R='R_DAT'
+
+* 47k pull-up (VDDIO modeled as AC GND — low-Z supply)
+RPU_D0 D0_NODE 0 R='R_PU'
+
+* 10pF C0G shunt — the critical component
+* RUN A: populated (correct) — leave this line in
+C_D0_SHUNT D0_NODE 0 C='C_SHUNT'   $ 10pF C0G — kills stub resonance
+
+* RUN B: comment out line above to see stub resonance WITHOUT shunt cap
+* (stub will show S11 dip at 2-3GHz = actively absorbing WiFi energy)
+
+XTRACE_D0 D0_NODE D0_ANT_PORT TRACE
+RL_D0 D0_ANT_PORT 0 R=50
+
+.ENDS DATA0_STUB
+
+* ============================================================================
+* NETWORK 3: CMD / CR — Pin 3
+* Identical topology to DATA0 — independent component, separate assessment
+* ============================================================================
+.SUBCKT CMD_FILTER CMD_SRC_PORT CMD_ANT_PORT
+
+VP1 CMD_SRC_PORT 0 AC 1 DC 0
+R_CMD CMD_SRC_PORT CMD_NODE R='R_DAT'
+RPU_CMD CMD_NODE 0 R='R_PU'
+C_CMD_SHUNT CMD_NODE 0 C='C_SHUNT'
+XTRACE_CMD CMD_NODE CMD_ANT_PORT TRACE
+RL_CMD CMD_ANT_PORT 0 R=50
+
+.ENDS CMD_FILTER
+
+* ============================================================================
+* NETWORK 4: PCIe RefClk CMC — Pins 7+8
+* SDD21 = differential insertion loss (must be <0.5dB @ 100MHz)
+* SCC21 = common-mode rejection (must be >20dB @ 2400MHz for BT)
+* SDC21 = mode conversion (layout asymmetry indicator — should be <-30dB)
+* ============================================================================
+.SUBCKT REFCLK_CMC RP_IN RN_IN RP_OUT RN_OUT
+
+* Differential pair sources — 100 ohm differential
+VP P RP_IN 0 AC 0.5 DC 0    $ +0.5V on positive
+VN N RN_IN 0 AC -0.5 DC 0   $ -0.5V on negative (differential excitation)
+
+* CMC subcircuit
+XCMC RP_IN RN_IN RP_OUT RN_OUT CMC_REFCLK
+
+* 15mm differential traces to connector
+XTRACE_P RP_OUT RP_ANT TRACE
+XTRACE_N RN_OUT RN_ANT TRACE
+
+* Differential 100 ohm load (50 ohm each side to GND)
+RL_P RP_ANT 0 R=50
+RL_N RN_ANT 0 R=50
+
+* Output ports for mixed-mode S-parameter extraction
+.PORT RP_ANT LABEL=REFCLK_P_ANT
+.PORT RN_ANT LABEL=REFCLK_N_ANT
+
+* Mixed-mode directive — CST 2025 syntax
+.MIXEDMODE DIFFERENTIAL
++ PORT_P1_POS = P PORT_P1_NEG = N       $ input differential port
++ PORT_P2_POS = REFCLK_P_ANT PORT_P2_NEG = REFCLK_N_ANT  $ output diff port
++ COMPUTE SDD21 SCC21 SDC21
+
+.ENDS REFCLK_CMC
+
+* ============================================================================
+* NETWORK 5: PCIe TX Pair — Pins 11+12
+* Compares 0201 vs 0402 AC coupling cap package
+* 0402 ESL creates resonance peak at 3-4GHz = emission spike in 5GHz WiFi
+* ============================================================================
+.SUBCKT PCIE_TX TX_P_IN TX_N_IN TX_P_ANT TX_N_ANT
+
+* Differential sources
+VP TX_P_IN 0 AC 0.5 DC 0
+VN TX_N_IN 0 AC -0.5 DC 0
+
+* AC coupling caps — choose ONE subcircuit per line:
+* RUN A: 0201 caps (correct — flat to 5GHz)
+XC_TX_P_0201 TX_P_IN TX_P_AC CAP_0201
+XC_TX_N_0201 TX_N_IN TX_N_AC CAP_0201
+
+* RUN B: 0402 caps (wrong package — resonance at 3-4GHz)
+* Comment out RUN A above and uncomment below to compare:
+* XC_TX_P_0402 TX_P_IN TX_P_AC CAP_0402
+* XC_TX_N_0402 TX_N_IN TX_N_AC CAP_0402
+
+* CMC subcircuit — TDK ACM2012-361-2P (360ohm@100MHz)
+XCMC_TX TX_P_AC TX_N_AC TX_P_CMC TX_N_CMC CMC_TX
+
+* 15mm differential traces
+XTRACE_TX_P TX_P_CMC TX_P_ANT TRACE
+XTRACE_TX_N TX_N_CMC TX_N_ANT TRACE
+
+RL_TX_P TX_P_ANT 0 R=50
+RL_TX_N TX_N_ANT 0 R=50
+
+.MIXEDMODE DIFFERENTIAL
++ PORT_P1_POS = TX_P_IN PORT_P1_NEG = TX_N_IN
++ PORT_P2_POS = TX_P_ANT PORT_P2_NEG = TX_N_ANT
++ COMPUTE SDD21 SCC21
+
+.ENDS PCIE_TX
+
+* ============================================================================
+* NETWORK 6: 3.3V Power Rail — Pin 4
+* Z(FB_OUT) = supply impedance seen by connector pin
+* Target: Z < 1 ohm from 10MHz to 3GHz
+* ============================================================================
+.SUBCKT PWR_3V3 PWR_SRC_PORT PWR_ANT_PORT
+
+* PMIC modeled as 1 ohm source (low-Z switching supply)
+VPMIC PWR_SRC_PORT 0 AC 1 DC 0
+
+* Ferrite bead — Murata BLM15PX601SN1D
+* Parallel RL model: lossy inductor
+* 600 ohm @ 100MHz → L = 955pH, R = 600 ohm in parallel
+LFB PWR_SRC_PORT FB_NODE L='FB_L'
+RFB PWR_SRC_PORT FB_NODE R='FB_R'
+
+* 3-stage decoupling at FB output node (connector side)
+* Stage 1: 10uF X5R bulk — handles insertion surge, SRF ~1.3MHz
+C_BULK FB_NODE 0 C=10E-6
+LESL_BULK FB_NODE 0 L=1.5E-9   $ 1.5nH ESL for 0402 10uF
+
+* Stage 2: 100nF X7R mid — covers 10-200MHz, SRF ~29MHz (0201)
+C_MID FB_NODE 0 C=100E-9
+LESL_MID FB_NODE 0 L=300E-12   $ 0.3nH ESL for 0201
+
+* Stage 3: 100pF C0G HF — covers 300MHz-3GHz, SRF ~920MHz (0201)
+C_HF FB_NODE 0 C=100E-12
+LESL_HF FB_NODE 0 L=300E-12    $ 0.3nH ESL for 0201
+
+* 50 ohm load = connector pin / SD card input impedance at RF
+RL_PWR FB_NODE PWR_ANT_PORT R=0   $ direct connection — load is port
+RPWR_LOAD PWR_ANT_PORT 0 R=50
+
+.ENDS PWR_3V3
+
+* ============================================================================
+* TOP-LEVEL: COMBINED PRIORITY NETWORK
+* All filter networks instantiated from a single normalized aggressor
+* Run this to generate the PRIORITY_2496MHz ranking plot
+* ============================================================================
+
+* Instantiate all networks
+XCLK   CLK_SRC   CLK_ANT   CLK_FILTER
+XDATA0 D0_SRC    D0_ANT    DATA0_STUB
+XCMD   CMD_SRC   CMD_ANT   CMD_FILTER
+XPWR   PWR_SRC   PWR_ANT   PWR_3V3
+
+* RefClk and PCIe TX are differential — instantiated with 4 ports
+XREFCLK RP_IN RN_IN RP_ANT RN_ANT REFCLK_CMC
+XTXPAIR TX_P_SRC TX_N_SRC TX_P_ANT TX_N_ANT PCIE_TX
+
+* ── AC ANALYSIS ─────────────────────────────────────────────────────────────
+.AC LIN 3000 10MEG 6GIG
+
+* ── S-PARAMETER EXTRACTION — CST 2025 SYNTAX ────────────────────────────────
+* Single-ended networks: S21 = isolation (source port → antenna port)
+.SP
++ PORT1 CLK_SRC  Z=50  LABEL=CLK_SRC
++ PORT2 CLK_ANT  Z=50  LABEL=CLK_ANT
++ PORT3 D0_SRC   Z=50  LABEL=D0_SRC
++ PORT4 D0_ANT   Z=50  LABEL=D0_ANT
++ PORT5 CMD_SRC  Z=50  LABEL=CMD_SRC
++ PORT6 CMD_ANT  Z=50  LABEL=CMD_ANT
++ PORT7 PWR_SRC  Z=50  LABEL=PWR_SRC
++ PORT8 PWR_ANT  Z=50  LABEL=PWR_ANT
+
+* ── PARAMETER SWEEP BLOCK ───────────────────────────────────────────────────
+*
+* HOW TO CHANGE TRACE LENGTH:
+* Option A — single value: change TRACE_LEN in .PARAM above, re-run
+* Option B — sweep multiple lengths simultaneously (uncomment below):
+*
+* .STEP PARAM TRACE_LEN LIST 5 10 15 20 25
+*   This runs 5 simulations at 5mm, 10mm, 15mm, 20mm, 25mm
+*   All S21 plots will show 5 overlaid curves — one per length
+*   The stub resonance frequency shifts visibly — you can read off
+*   where your actual trace length puts the resonance relative to 2.4GHz
+*
+* ── CLK DIELECTRIC COMPARISON ───────────────────────────────────────────────
+* To compare C0G vs X7R:
+* Step 1 — in CLK_FILTER subcircuit above, C_CLK_A is active (C0G)
+*   Run → save results as "COG_run"
+* Step 2 — comment out C_CLK_A, uncomment C_CLK_B (X7R degraded)
+*   Run → save results as "X7R_run"
+*   Overlay both in Results → S-Parameters → Compare Datasets
+*
+* ── 0201 vs 0402 AC CAP COMPARISON ─────────────────────────────────────────
+* To compare 0201 vs 0402:
+* Step 1 — CAP_0201 active (default) → run → save as "0201_run"
+* Step 2 — comment out CAP_0201 lines, uncomment CAP_0402 lines → run → save as "0402_run"
+*   The 0402 run will show a resonance BUMP in SDD21 at 3-4GHz
+*
+.END
+
+* ============================================================================
+* QUICK REFERENCE: EXPECTED S21 VALUES AT KEY FREQUENCIES
+* Read these from your simulation results to validate the setup
+* ============================================================================
+*
+* Network             Freq      Expected S21   Pass/Fail target
+* ──────────────────────────────────────────────────────────────
+* CLK LPF (C0G)       104 MHz   -0.3 dB        > -1 dB (passes CLK)
+* CLK LPF (C0G)       330 MHz   -3.0 dB        = fc confirmation
+* CLK LPF (C0G)      2496 MHz  -18.0 dB        < -15 dB for FCC
+* CLK LPF (X7R bad)  2496 MHz  -12.0 dB        FAIL — shows C0G need
+*
+* DATA0 stub (w 10pF) 2496 MHz  -20 dB S11      HIGH = good (terminated)
+* DATA0 stub (no 10pF)2.0-3 GHz  -3 dB S11 DIP  LOW = bad (resonating)
+*
+* RefClk CMC SDD21    100 MHz   -0.3 dB        < -0.5 dB (diff IL ok)
+* RefClk CMC SCC21   2400 MHz  -22 dB          < -20 dB (BT protected)
+* RefClk CMC SDC21   all freq  -32 dB          < -30 dB (symmetric layout)
+*
+* PCIe TX SDD21      2500 MHz   -0.8 dB        < -1 dB (eye open)
+* PCIe TX SDD21      5000 MHz   -1.2 dB        < -2 dB (Gen2 eye ok)
+* PCIe TX SCC21      2400 MHz  -21 dB          < -20 dB
+* PCIe TX SDD21 0402  3500 MHz  +1.5 dB PEAK   FAIL — shows 0402 danger
+*
+* 3.3V rail Z(FB_OUT)  10 MHz   0.3 ohm        < 1 ohm — bulk cap active
+* 3.3V rail Z(FB_OUT) 100 MHz   0.05 ohm       < 1 ohm — mid cap active
+* 3.3V rail Z(FB_OUT) 500 MHz   0.03 ohm       < 1 ohm — HF cap active
+*
+* PRIORITY ORDER (read from S21 at 2496MHz, highest = worst = most urgent):
+* 1. CLK LPF          — most important, without it S21 = ~0dB (no filtering)
+* 2. RefClk CMC SCC21 — 2nd most important for BT protection
+* 3. PCIe TX CMC SCC21— 3rd, WiFi 5GHz protection
+* 4. DATA0/CMD stubs  — 4th, risk depends on trace length (run the sweep)
+* 5. Power rail       — 5th, good filtering but -35dB already clean
+* ============================================================================
