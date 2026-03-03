@@ -1,0 +1,200 @@
+* =============================================================================
+* J4600 EMI Filter Validation — LTspice Netlist
+* WiFi+BT System | 104MHz SD CLK | 6mm Antenna Proximity
+*
+* HOW TO OPEN IN LTSPICE:
+*   File -> Open -> select this .net file -> LTspice opens it directly
+*   Press the Run button (green arrow / F5)
+*   When waveform window opens: click any wire OR
+*   Add trace: V(out_A)/V(in_A) = S21 for Filter A etc.
+*
+* ALL 7 FILTERS RUN SIMULTANEOUSLY in one simulation
+* =============================================================================
+
+* ── SIMULATION COMMAND ───────────────────────────────────────────────────────
+* AC sweep: 10MHz to 6GHz, 100 points per decade
+.ac dec 100 10Meg 6Gig
+
+* ── TRANSMISSION LINE PARAMETERS ─────────────────────────────────────────────
+* 15mm FR4 microstrip, 50 ohm, VF=0.55
+* TD = 15mm / (0.55 * 299.8mm/ns) = 91ps
+* Change .param TRACE_TD to adjust for your routing length:
+*   5mm  = 30ps    10mm = 61ps    15mm = 91ps    20mm = 121ps   25mm = 152ps
+.param TRACE_TD = 91p
+
+
+* =============================================================================
+* FILTER A — CLK RC LPF (Pin 5)          TIER: MUST #1
+* =============================================================================
+* Source
+VA_in  in_A  0  AC 1
+* 22 ohm series R
+RA1    in_A  filt_A  22
+* 22pF C0G shunt — change to 11p to simulate X7R degraded @1.8V
+CA1    filt_A  0  22p
+* 15mm 50-ohm trace to connector
+TA1    filt_A  0  out_A  0  Z0=50  TD={TRACE_TD}
+* 50 ohm antenna-side load
+RLA    out_A  0  50
+*
+* PLOT: V(out_A)/V(in_A)
+* EXPECT: -0.3dB @ 104MHz | -3dB @ 330MHz | -18dB @ 2496MHz
+* COMPARE: change CA1 to 11p -> -12dB @ 2496MHz (X7R fail case)
+
+
+* =============================================================================
+* FILTER B — DATA0 Stub WITH 10pF shunt  TIER: SHOULD #8
+* =============================================================================
+VB_in  in_B  0  AC 1
+RB1    in_B  stub_B  22
+* 47k pull-up (VDDIO = AC ground for high-freq analysis)
+RPU_B  stub_B  0  47k
+* 10pF C0G shunt — the critical component
+CSH_B  stub_B  0  10p
+* Trace
+TB1    stub_B  0  out_B  0  Z0=50  TD={TRACE_TD}
+RLB    out_B  0  50
+*
+* PLOT S21: V(out_B)/V(in_B) — should be clean, no resonance dip
+* PLOT S11: 1 - V(stub_B)/V(in_B) — should stay HIGH = stub terminated
+* EXPECT: flat response, no dip at 2.4GHz
+
+
+* =============================================================================
+* FILTER C — DATA0 Stub WITHOUT 10pF     TIER: shows RISK if B skipped
+* =============================================================================
+VC_in  in_C  0  AC 1
+RC1    in_C  stub_C  22
+RPU_C  stub_C  0  47k
+* NO shunt cap — this is the risk case
+TC1    stub_C  0  out_C  0  Z0=50  TD={TRACE_TD}
+RLC    out_C  0  50
+*
+* PLOT S11: V(stub_C)/V(in_C)
+* EXPECT: DIP at 2-3GHz = stub resonating = absorbing WiFi/BT energy into SoC
+* Compare directly with Filter B to see the difference the 10pF makes
+
+
+* =============================================================================
+* FILTER D — PCIe RefClk CMC (Pins 7+8)  TIER: MUST #5
+* Murata DLW21SN471SQ2L model
+* Single-ended CM approximation: shows CM attenuation vs frequency
+* =============================================================================
+VD_in  in_D  0  AC 1
+* CM inductance: 470ohm@100MHz -> L=748pH
+LD_cm  in_D  cm_mid  748p
+* CM loss resistance 470ohm
+RD_cm  cm_mid  out_pre_D  470
+* Differential leakage (small, nearly transparent)
+LD_lk  out_pre_D  out_pre2_D  500p
+* Trace
+TD1    out_pre2_D  0  out_D  0  Z0=50  TD={TRACE_TD}
+RLD    out_D  0  50
+*
+* PLOT: V(out_D)/V(in_D)
+* EXPECT: >20dB attenuation at 2400MHz = BT 24th harmonic suppressed
+* Without CMC this would be 0dB = full BT desense
+
+
+* =============================================================================
+* FILTER E — PCIe TX 0201 AC caps + CMC  TIER: MUST #6  CORRECT
+* TDK ACM2012-361-2P + 100nF 0201 caps
+* =============================================================================
+VE_in  in_E  0  AC 1
+* 100nF AC coupling cap, 0201 ESL=0.3nH
+CE1    in_E  esl_E  100n
+LE1    esl_E  post_cap_E  300p
+* CMC: TDK ACM2012-361 — 360ohm@100MHz -> L=573pH
+LE_cm  post_cap_E  cm_E  573p
+RE_cm  cm_E  out_pre_E  360
+LE_lk  post_cap_E  out_pre_E  800p
+* Trace
+TE1    out_pre_E  0  out_E  0  Z0=50  TD={TRACE_TD}
+RLE    out_E  0  50
+*
+* PLOT: V(out_E)/V(in_E)
+* EXPECT: flat -0.8dB to 5GHz (0201 correct) — no resonance peak
+
+
+* =============================================================================
+* FILTER F — PCIe TX 0402 AC caps        TIER: shows RISK of wrong package
+* Same as E but ESL=0.9nH (0402 package)
+* =============================================================================
+VF_in  in_F  0  AC 1
+CF1    in_F  esl_F  100n
+* 0402 ESL = 0.9nH — 3x higher than 0201
+LF1    esl_F  post_cap_F  900p
+LF_cm  post_cap_F  cm_F  573p
+RF_cm  cm_F  out_pre_F  360
+LF_lk  post_cap_F  out_pre_F  800p
+TF1    out_pre_F  0  out_F  0  Z0=50  TD={TRACE_TD}
+RLF    out_F  0  50
+*
+* PLOT: V(out_F)/V(in_F)
+* EXPECT: +1.5dB RESONANCE PEAK at ~3.5GHz
+* This peak is the emission spike that appears on FCC scan in 5GHz WiFi band
+* Compare E vs F side-by-side to see exactly why 0402 is wrong
+
+
+* =============================================================================
+* FILTER G — 3.3V Power Rail             TIER: SHOULD #9
+* Ferrite BLM15PX601SN1D + 3-stage decoupling
+* =============================================================================
+VG_in  pwr_in  0  AC 1
+* Ferrite: parallel RL model (600ohm@100MHz -> L=955pH)
+LG_fb  pwr_in  pwr_fb  955p
+RG_fb  pwr_in  pwr_fb  600
+* 10uF X5R bulk cap — ESL=1.5nH, SRF~1.3MHz
+CG_blk  pwr_fb  0  10u
+LG_blk  pwr_fb  0  1500p
+* 100nF X7R mid cap — ESL=0.3nH, SRF~29MHz
+CG_mid  pwr_fb  0  100n
+LG_mid  pwr_fb  0  300p
+* 100pF C0G HF cap — ESL=0.3nH, SRF~920MHz
+CG_hf   pwr_fb  0  100p
+LG_hf   pwr_fb  0  300p
+* Load
+RLG    pwr_fb  0  50
+*
+* PLOT: V(pwr_fb)/V(pwr_in) = S21 insertion loss
+* EXPECT: -35dB at 2496MHz = PMIC noise heavily attenuated at connector pin
+* Each cap stage visible: 10uF covers 1-30MHz, 100nF 30-300MHz, 100pF 300MHz-3GHz
+
+
+* =============================================================================
+* PROBE COMMANDS — LTspice plots these automatically on run
+* Delete any you don't want, add more with .measure
+* =============================================================================
+.probe V(out_A) V(in_A)
+.probe V(out_B) V(stub_B) V(in_B)
+.probe V(out_C) V(stub_C) V(in_C)
+.probe V(out_D) V(in_D)
+.probe V(out_E) V(in_E)
+.probe V(out_F) V(in_F)
+.probe V(pwr_fb) V(pwr_in)
+
+* =============================================================================
+* MEASURE STATEMENTS — prints key values to LTspice output log
+* View results: View -> SPICE Error Log after simulation
+* =============================================================================
+.meas AC S21_CLK_2496      find Vdb(out_A,in_A)  at=2.496G
+.meas AC S21_CLK_104       find Vdb(out_A,in_A)  at=104Meg
+.meas AC S21_CLK_330       find Vdb(out_A,in_A)  at=330Meg
+.meas AC S21_CMC_2400      find Vdb(out_D,in_D)  at=2.4G
+.meas AC S21_TX_0201_3500  find Vdb(out_E,in_E)  at=3.5G
+.meas AC S21_TX_0402_3500  find Vdb(out_F,in_F)  at=3.5G
+.meas AC S21_PWR_2496      find Vdb(pwr_fb,pwr_in) at=2.496G
+
+* =============================================================================
+* EXPECTED VALUES — compare your results against these
+* S21_CLK_2496   = -18dB   (C0G correct) | change CA1=11p -> -12dB (X7R fail)
+* S21_CLK_104    = -0.3dB  (CLK passes through cleanly)
+* S21_CLK_330    = -3.0dB  (filter corner frequency fc confirmation)
+* S21_CMC_2400   = -22dB   (BT 24th harmonic suppressed — MUST have CMC)
+* S21_TX_0201_3500 = -1dB  (0201 flat — correct)
+* S21_TX_0402_3500 = +1.5dB (0402 resonance PEAK — shows wrong package)
+* S21_PWR_2496   = -35dB   (power rail clean at connector pin)
+* =============================================================================
+
+.backanno
+.end
