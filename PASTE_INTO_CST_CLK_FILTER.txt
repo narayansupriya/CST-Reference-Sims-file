@@ -1,0 +1,14 @@
+* J4600 CLK RC LPF — Pin 5
+* Start here — simplest 2-port network
+* Port 1 = SoC CLK output
+* Port 2 = J4600 Pin 5 connector side
+*
+* EXPECTED RESULT after running:
+*   S21 at 104 MHz  = -0.3 dB  (CLK passes through cleanly)
+*   S21 at 330 MHz  = -3.0 dB  (filter corner frequency fc)
+*   S21 at 2496 MHz = -18 dB   (24th harmonic suppressed — WiFi/BT protected)
+
+R1  1  2  22
+C1  2  0  22E-12
+T1  2  0  3  0  Z0=50  TD=91E-12
+

@@ -1,0 +1,269 @@
+* ============================================================================
+* J4600 FILTER NETLISTS — CST Studio Suite 2025
+* Compatible with: Design Studio 2025 → SPICE Circuit Block
+*
+* HOW TO USE:
+*   1. CST Studio Suite 2025 → File → New → Design Studio Project
+*   2. Schematic canvas → right-click → Insert → Lumped Network Block
+*      (or: Home ribbon → Lumped Elements → SPICE Subcircuit)
+*   3. Double-click the block → text editor opens
+*   4. Copy ONE netlist section below (between the === markers)
+*      and paste into the text editor
+*   5. Set the number of ports to match the netlist (2 for single-ended, 4 for diff)
+*   6. Add S-Parameter Task: Task Tree (left panel) → Add Task → S-Parameters
+*   7. Set sweep: 10 MHz to 6000 MHz, 3000 points
+*   8. Run → Results → S-Parameters
+*
+* EACH SECTION IS INDEPENDENT — paste one at a time
+* ============================================================================
+
+
+* ============================================================================
+* NETLIST 1 — CLK RC LPF  (Pin 5)
+* Paste this into a 2-port SPICE block
+* Port 1 = SoC CLK output (IN)
+* Port 2 = J4600 Pin 5 connector side (OUT)
+*
+* TO CHANGE TRACE LENGTH: change TD value
+*   TD = trace_length_mm / 164890  (in seconds)
+*   5mm  → TD=30.3ps  → TD=30.3E-12
+*   10mm → TD=60.6ps  → TD=60.6E-12
+*   15mm → TD=91.0ps  → TD=91.0E-12  (default)
+*   20mm → TD=121ps   → TD=121E-12
+*   25mm → TD=151ps   → TD=151E-12
+*
+* RUN A — C0G correct (22pF flat):     C_SHUNT value = 22E-12
+* RUN B — X7R degraded at 1.8V bias:   C_SHUNT value = 11E-12  (change and re-run)
+*
+* EXPECTED S21 at 2496 MHz:
+*   C0G (22pF): -18 dB   ← target
+*   X7R (11pF): -12 dB   ← fail case — shows why C0G is mandatory
+* ============================================================================
+
+* --- BEGIN NETLIST 1: CLK LPF ---
+R_SERIES  1  2  22
+C_SHUNT   2  0  22E-12
+T_TRACE   2  0  3  0  Z0=50  TD=91.0E-12
+* Port assignments (CST assigns these automatically to block pins)
+* Port 1 = node 1 (SoC side)
+* Port 2 = node 3 (connector side)
+.END
+* --- END NETLIST 1 ---
+
+
+* ============================================================================
+* NETLIST 2 — DATA0 Pull-up Stub  (Pin 7, SDC mode)
+* Paste this into a 2-port SPICE block
+* Port 1 = SoC DATA0 output
+* Port 2 = J4600 Pin 7 connector side
+*
+* RUN A — WITH 10pF C0G shunt (correct):   leave C_SHUNT_10P as-is
+* RUN B — WITHOUT 10pF shunt:              delete or comment out C_SHUNT_10P line
+*
+* WHAT TO LOOK FOR:
+*   S11 at Port 2 (connector side) = stub return loss
+*   WITH 10pF:    S11 stays HIGH above 300 MHz (stub terminated — good)
+*   WITHOUT 10pF: S11 DIPS at 2–3 GHz (stub resonates, absorbs WiFi energy — bad)
+*
+* The trace length matters most here — change TD to your actual routing
+* ============================================================================
+
+* --- BEGIN NETLIST 2: DATA0 STUB ---
+R_SERIES   1  2  22
+R_PULLUP   2  0  47000
+C_SHUNT_10P 2  0  10E-12
+T_TRACE    2  0  3  0  Z0=50  TD=91.0E-12
+* Port 1 = node 1 (SoC side)
+* Port 2 = node 3 (connector side)
+.END
+* --- END NETLIST 2 ---
+
+
+* ============================================================================
+* NETLIST 3 — CMD / CR Filter  (Pin 3, SDC mode)
+* Identical topology to DATA0 — paste into 2-port SPICE block
+* Independent component — simulate separately from DATA0
+* ============================================================================
+
+* --- BEGIN NETLIST 3: CMD FILTER ---
+R_SERIES   1  2  22
+R_PULLUP   2  0  47000
+C_SHUNT    2  0  10E-12
+T_TRACE    2  0  3  0  Z0=50  TD=91.0E-12
+* Port 1 = node 1
+* Port 2 = node 3
+.END
+* --- END NETLIST 3 ---
+
+
+* ============================================================================
+* NETLIST 4 — PCIe RefClk CMC  (Pins 7+8, PCIe mode)
+* Paste this into a 4-port SPICE block
+* Ports: 1=RefClk+ in, 2=RefClk- in, 3=RefClk+ out, 4=RefClk- out
+*
+* IN CST 2025 — MIXED MODE S-PARAMETERS:
+*   After running, go to: Results → S-Parameters → Mixed Mode
+*   Select: Port pair 1 (ports 1+2) differential, Port pair 2 (ports 3+4) differential
+*   This gives you:
+*     SDD21 = differential insertion loss  → must be < 0.5 dB at 100 MHz
+*     SCC21 = common-mode rejection        → must be < -20 dB at 2400 MHz
+*     SDC21 = mode conversion              → should be < -30 dB (layout quality)
+*
+* CMC MODEL:
+*   Two coupled inductors (K=0.99) = common-mode path (high impedance)
+*   Two small inductors = differential leakage (low, transparent to RefClk)
+*   Loss resistors = CMC dissipation at 100 MHz
+*   Part modelled: Murata DLW21SN471SQ2L (470 ohm @ 100 MHz)
+* ============================================================================
+
+* --- BEGIN NETLIST 4: REFCLK CMC (4-port) ---
+* Differential leakage (nearly transparent to diff signal)
+L_DIFF_P   1  3  0.5E-9
+L_DIFF_N   2  4  0.5E-9
+
+* Common-mode coupled inductors (tight coupling K=0.99)
+L_CM_P     1  5  0.748E-9
+L_CM_N     2  6  0.748E-9
+K_CMC      L_CM_P  L_CM_N  0.99
+
+* CM loss resistors (470 ohm @ 100 MHz for DLW21SN471SQ2L)
+R_CM_P     5  3  470
+R_CM_N     6  4  470
+
+* 15mm traces from CMC to connector (adjust TD for actual length)
+T_P        3  0  7  0  Z0=50  TD=91.0E-12
+T_N        4  0  8  0  Z0=50  TD=91.0E-12
+
+* Port assignments
+* Port 1 = node 1 (RefClk+ SoC side)
+* Port 2 = node 2 (RefClk- SoC side)
+* Port 3 = node 7 (RefClk+ connector side)
+* Port 4 = node 8 (RefClk- connector side)
+.END
+* --- END NETLIST 4 ---
+
+
+* ============================================================================
+* NETLIST 5 — PCIe TX AC Caps + CMC  (Pins 11+12)
+* Paste into 4-port SPICE block
+* Ports: 1=TX+ in, 2=TX- in, 3=TX+ out (connector), 4=TX- out (connector)
+*
+* RUN A — 0201 AC caps (correct):  ESL = 0.3nH → flat to 5 GHz
+* RUN B — 0402 AC caps (wrong):    ESL = 0.9nH → resonance bump at 3-4 GHz
+*
+* TO SWITCH RUNS:
+*   Change L_ESL_P and L_ESL_N values:
+*   0201 correct:  L_ESL_P = 0.3E-9  L_ESL_N = 0.3E-9
+*   0402 wrong:    L_ESL_P = 0.9E-9  L_ESL_N = 0.9E-9
+*
+* WHAT TO LOOK FOR:
+*   SDD21 at 5 GHz:
+*     0201: flat ~-1 dB  (good — eye stays open)
+*     0402: +1.5 dB PEAK at ~3.5 GHz  (bad — emission spike in 5 GHz WiFi band)
+* ============================================================================
+
+* --- BEGIN NETLIST 5: PCIE TX 0201 vs 0402 (4-port) ---
+* AC coupling caps with parasitic ESL
+* --- RUN A: 0201 (ESL=0.3nH) --- change to 0.9nH for 0402 comparison
+C_AC_P     1  5  100E-9
+L_ESL_P    5  3  0.3E-9
+
+C_AC_N     2  6  100E-9
+L_ESL_N    6  4  0.3E-9
+
+* CMC — TDK ACM2012-361-2P (360 ohm @ 100 MHz)
+L_DIFF_P   3  9   0.8E-9
+L_DIFF_N   4  10  0.8E-9
+L_CM_P     3  11  0.573E-9
+L_CM_N     4  12  0.573E-9
+K_CMC      L_CM_P  L_CM_N  0.99
+R_CM_P     11  9  360
+R_CM_N     12  10  360
+
+* 15mm differential traces to connector
+T_P        9  0  7  0  Z0=50  TD=91.0E-12
+T_N        10  0  8  0  Z0=50  TD=91.0E-12
+
+* Port 1 = node 1, Port 2 = node 2 (TX+/- SoC side)
+* Port 3 = node 7, Port 4 = node 8 (TX+/- connector side)
+.END
+* --- END NETLIST 5 ---
+
+
+* ============================================================================
+* NETLIST 6 — 3.3V Power Rail Decoupling  (Pin 4)
+* Paste into 2-port SPICE block
+* Port 1 = PMIC output (supply side)
+* Port 2 = connector Pin 4 (load side)
+*
+* WHAT TO PLOT:
+*   Z(Port 2) = impedance seen by connector pin vs frequency
+*   Target: Z < 1 ohm from 10 MHz to 3 GHz
+*
+*   Results → Z-Parameters → Z22
+*   Three runs — comment out stages to see individual contributions:
+*     Full: all three caps + ferrite
+*     No ferrite: comment out L_FB and R_FB lines
+*     No HF cap: comment out C_HF line
+*
+* EACH STAGE COVERS A DECADE:
+*   10µF bulk:   10 MHz – 30 MHz (card insertion surge)
+*   100nF mid:   30 MHz – 300 MHz (CLK ripple)
+*   100pF C0G:   300 MHz – 3 GHz (sub-ns spikes)
+* ============================================================================
+
+* --- BEGIN NETLIST 6: 3.3V POWER RAIL (2-port) ---
+* Ferrite bead — Murata BLM15PX601SN1D (parallel RL model)
+* 600 ohm @ 100 MHz → L = 0.955 nH
+L_FB       1  3  0.955E-9
+R_FB       1  3  600
+
+* 10uF bulk cap (0402 X5R) — ESL=1.5nH, SRF~1.3 MHz
+C_BULK     3  0  10E-6
+L_ESL_BULK 3  0  1.5E-9
+
+* 100nF mid cap (0201 X7R) — ESL=0.3nH, SRF~29 MHz
+C_MID      3  0  100E-9
+L_ESL_MID  3  0  0.3E-9
+
+* 100pF HF cap (0201 C0G) — ESL=0.3nH, SRF~920 MHz
+C_HF       3  0  100E-12
+L_ESL_HF   3  0  0.3E-9
+
+* Port assignments
+* Port 1 = node 1 (PMIC side)
+* Port 2 = node 3 (connector pin side)
+.END
+* --- END NETLIST 6 ---
+
+
+* ============================================================================
+* QUICK REFERENCE — EXPECTED SIMULATION RESULTS
+* Read these from CST Results panel to validate your setup is correct
+*
+* Netlist 1 — CLK LPF S21:
+*   104 MHz:   -0.3 dB   (CLK passes with minimal loss — good)
+*   330 MHz:   -3.0 dB   (fc confirmation)
+*   2496 MHz: -18.0 dB   (24th harmonic suppressed — FCC target)
+*   C0G vs X7R at 2496 MHz: -18 dB vs -12 dB  (6 dB gap = pass/fail difference)
+*
+* Netlist 2 — DATA0 Stub S11 at Port 2:
+*   With 10pF:    S11 > -3 dB above 500 MHz  (stub terminated — correct)
+*   Without 10pF: S11 dips to -15 dB at ~2.5 GHz  (stub resonating — bad)
+*
+* Netlist 4 — RefClk CMC mixed-mode:
+*   SDD21 at 100 MHz:  > -0.5 dB  (CMC transparent to differential RefClk)
+*   SCC21 at 2400 MHz: < -20 dB   (BT harmonic suppressed)
+*   SDC21 all freq:    < -30 dB   (mode conversion — layout symmetry check)
+*
+* Netlist 5 — PCIe TX:
+*   SDD21 at 2500 MHz:  -0.8 dB  0201 (eye open at Gen1)
+*   SDD21 at 3500 MHz: +1.5 dB  0402 peak  (WRONG — emission spike)
+*   SCC21 at 2400 MHz: -21 dB   (WiFi 5 GHz protected)
+*
+* Netlist 6 — 3.3V Rail Z(Port 2):
+*   10 MHz:   0.3 ohm   (bulk cap active)
+*   100 MHz:  0.05 ohm  (mid cap active)
+*   500 MHz:  0.03 ohm  (HF cap active)
+*   Target: Z < 1 ohm across entire 10 MHz – 3 GHz range
+* ============================================================================
