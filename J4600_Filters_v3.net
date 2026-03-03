@@ -1,0 +1,106 @@
+* J4600 EMI Filter Validation — LTspice
+* Fixed version — open directly and press F5 to run
+*
+* AFTER RUNNING: Simulate -> Add Trace (or Ctrl+A)
+* Type these one at a time to see each filter:
+*   VDB(out_A)  = CLK filter      target -18dB at 2.496GHz  MUST #1
+*   VDB(out_B)  = DATA0 with cap  flat response = good       SHOULD
+*   VDB(out_C)  = DATA0 no cap    dip at 2-3GHz = bad        shows risk
+*   VDB(out_D)  = RefClk CMC      target -22dB at 2.4GHz    MUST #5
+*   VDB(out_E)  = PCIe TX 0201    flat to 5GHz = good        MUST #6
+*   VDB(out_F)  = PCIe TX 0402    peak at 3.5GHz = bad       shows risk
+*   VDB(pwr_fb) = Power rail      target -35dB at 2.496GHz  SHOULD
+
+.param TRACE_TD=91p
+
+* ── FILTER A: CLK RC LPF  Pin 5  MUST #1 ─────────────────────────────────────
+* Change CA1 from 22p to 11p to see X7R degraded result (-12dB vs -18dB)
+VA   in_A  0  AC 1
+RA1  in_A  filt_A  22
+CA1  filt_A  0  22p
+TA1  filt_A  0  out_A  0  Td={TRACE_TD}  Z0=50
+RLA  out_A  0  50
+
+* ── FILTER B: DATA0 WITH 10pF shunt  SHOULD ──────────────────────────────────
+VB   in_B  0  AC 1
+RB1  in_B  stub_B  22
+RPU_B  stub_B  0  47k
+CSH_B  stub_B  0  10p
+TB1  stub_B  0  out_B  0  Td={TRACE_TD}  Z0=50
+RLB  out_B  0  50
+
+* ── FILTER C: DATA0 WITHOUT 10pF  RISK CASE ──────────────────────────────────
+* Plot VDB(stub_C) — resonance dip at 2-3GHz shows stub absorbing WiFi energy
+VC   in_C  0  AC 1
+RC1  in_C  stub_C  22
+RPU_C  stub_C  0  47k
+TC1  stub_C  0  out_C  0  Td={TRACE_TD}  Z0=50
+RLC  out_C  0  50
+
+* ── FILTER D: RefClk CMC  Pins 7+8  MUST #5 ─────────────────────────────────
+* Murata DLW21SN471SQ2L: 470ohm@100MHz
+VD   in_D  0  AC 1
+LD1  in_D  nd1  748p
+RD1  nd1  nd2  470
+LD2  nd2  nd3  500p
+TD1  nd3  0  out_D  0  Td={TRACE_TD}  Z0=50
+RLD  out_D  0  50
+
+* ── FILTER E: PCIe TX 0201 caps  MUST #6  CORRECT ───────────────────────────
+* 100nF 0201 ESL=0.3nH + TDK ACM2012-361 360ohm@100MHz
+VE   in_E  0  AC 1
+CE1  in_E  ne1  100n
+LE1  ne1  ne2  300p
+LE2  ne2  ne3  800p
+RE1  ne2  ne3  1Meg
+LE3  ne3  ne4  573p
+RE2  ne4  ne5  360
+TE1  ne5  0  out_E  0  Td={TRACE_TD}  Z0=50
+RLE  out_E  0  50
+
+* ── FILTER F: PCIe TX 0402 caps  RISK CASE ───────────────────────────────────
+* ESL=0.9nH creates resonance peak at 3.5GHz in 5GHz WiFi band
+VF   in_F  0  AC 1
+CF1  in_F  nf1  100n
+LF1  nf1  nf2  900p
+LF2  nf2  nf3  800p
+RF1  nf2  nf3  1Meg
+LF3  nf3  nf4  573p
+RF2  nf4  nf5  360
+TF1  nf5  0  out_F  0  Td={TRACE_TD}  Z0=50
+RLF  out_F  0  50
+
+* ── FILTER G: 3.3V Power Rail  SHOULD ────────────────────────────────────────
+* BLM15PX601SN1D + 10uF + 100nF + 100pF
+VG   pwr_in  0  AC 1
+LG1  pwr_in  pwr_fb  955p
+RG1  pwr_in  pwr_fb  600
+CG1  pwr_fb  0  10u
+LG2  pwr_fb  0  1500p
+CG2  pwr_fb  0  100n
+LG3  pwr_fb  0  300p
+CG3  pwr_fb  0  100p
+LG4  pwr_fb  0  300p
+RLG  pwr_fb  0  50
+
+* ── SIMULATION ────────────────────────────────────────────────────────────────
+.ac dec 100 10Meg 6Gig
+
+* ── KEY VALUES — check View -> SPICE Error Log after run ──────────────────────
+.meas AC CLK_104MHz   find VDB(out_A) at=104Meg
+.meas AC CLK_2496MHz  find VDB(out_A) at=2.496G
+.meas AC CMC_2400MHz  find VDB(out_D) at=2.4G
+.meas AC TX0201_3500  find VDB(out_E) at=3.5G
+.meas AC TX0402_3500  find VDB(out_F) at=3.5G
+.meas AC PWR_2496MHz  find VDB(pwr_fb) at=2.496G
+
+* EXPECTED LOG OUTPUT:
+*   CLK_104MHz   = -0.3dB    good — CLK passes through
+*   CLK_2496MHz  = -18dB     good — 24th harmonic blocked
+*   CMC_2400MHz  = -22dB     good — BT harmonic blocked
+*   TX0201_3500  = -1dB      good — 0201 flat
+*   TX0402_3500  = +1.5dB    BAD  — 0402 resonance peak
+*   PWR_2496MHz  = -35dB     good — rail clean at connector
+
+.backanno
+.end
